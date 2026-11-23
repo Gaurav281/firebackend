@@ -42,13 +42,14 @@ export const submitGameScore = async (req, res) => {
       }
 
       // Atomically decrement turnsLeft and push score
-      const newBestScore = Math.max(participant.bestScore, numScore);
+      const newBestScore = Math.max(participant.bestScore || 0, numScore);
+      const newBestDiamonds = Math.max(participant.bestDiamonds || 0, numDiamonds);
 
       const updatedParticipant = await TournamentParticipant.findOneAndUpdate(
         { tournamentId, userId, turnsLeft: { $gt: 0 } },
         {
           $inc: { turnsLeft: -1 },
-          $set: { bestScore: newBestScore },
+          $set: { bestScore: newBestScore, bestDiamonds: newBestDiamonds },
           $push: {
             scores: {
               score: numScore,
@@ -73,17 +74,22 @@ export const submitGameScore = async (req, res) => {
         $max: { highestGameScore: numScore },
       });
 
-      // Calculate current rank
+      // Calculate current rank (Ranking is based primarily on diamonds collected, then score)
       const rank =
         (await TournamentParticipant.countDocuments({
           tournamentId,
-          bestScore: { $gt: newBestScore },
+          $or: [
+            { bestDiamonds: { $gt: newBestDiamonds } },
+            { bestDiamonds: newBestDiamonds, bestScore: { $gt: newBestScore } },
+          ],
         })) + 1;
 
       return res.json({
         success: true,
         message: 'Turn recorded successfully!',
         score: numScore,
+        diamondsCollected: numDiamonds,
+        bestDiamonds: updatedParticipant.bestDiamonds,
         bestScore: updatedParticipant.bestScore,
         turnsLeft: updatedParticipant.turnsLeft,
         totalTurns: updatedParticipant.totalTurns,

@@ -34,6 +34,12 @@ const tournamentParticipantSchema = new mongoose.Schema(
       min: 0,
       index: true,
     },
+    bestDiamonds: {
+      type: Number,
+      default: 0,
+      min: 0,
+      index: true,
+    },
     scores: [
       {
         score: { type: Number, required: true },
@@ -62,7 +68,8 @@ const tournamentParticipantSchema = new mongoose.Schema(
 // Prevent duplicate participation by the same user in the same tournament
 tournamentParticipantSchema.index({ tournamentId: 1, userId: 1 }, { unique: true });
 
-// For fast leaderboard sorting: tournament + bestScore descending + updatedAt
+// For fast leaderboard sorting: tournament + bestDiamonds descending + bestScore descending + updatedAt
+tournamentParticipantSchema.index({ tournamentId: 1, bestDiamonds: -1, bestScore: -1, updatedAt: 1 });
 tournamentParticipantSchema.index({ tournamentId: 1, bestScore: -1, updatedAt: 1 });
 
 export const TournamentParticipant = mongoose.model(

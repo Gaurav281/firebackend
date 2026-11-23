@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   createTournament,
   declareTournamentResult,
+  deleteTournament,
   getAdminTransactions,
   approveDeposit,
   rejectDeposit,
@@ -19,6 +20,7 @@ router.use(requireAdmin);
 
 router.get('/stats', getAdminStats);
 router.post('/tournaments', createTournament);
+router.delete('/tournaments/:tournamentId', deleteTournament);
 router.post('/tournaments/:tournamentId/declare', declareTournamentResult);
 router.get('/transactions', getAdminTransactions);
 router.post('/transactions/deposit/:transactionId/approve', approveDeposit);

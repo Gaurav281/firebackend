@@ -103,9 +103,9 @@ export const declareTournamentResult = async (req, res) => {
       });
     }
 
-    // Fetch all participants sorted by bestScore descending, then joinedAt ascending
+    // Fetch all participants sorted primarily by bestDiamonds, then bestScore descending
     const participants = await TournamentParticipant.find({ tournamentId })
-      .sort({ bestScore: -1, updatedAt: 1 })
+      .sort({ bestDiamonds: -1, bestScore: -1, updatedAt: 1 })
       .populate('userId');
 
     if (participants.length === 0) {
@@ -130,6 +130,7 @@ export const declareTournamentResult = async (req, res) => {
       winners.push({
         userId: part.userId._id,
         rank,
+        diamonds: part.bestDiamonds || 0,
         score: part.bestScore,
         prize: prizeAmount,
       });
@@ -437,6 +438,56 @@ export const getAdminStats = async (req, res) => {
       },
     });
   } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const deleteTournament = async (req, res) => {
+  try {
+    const { tournamentId } = req.params;
+
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: 'Tournament not found' });
+    }
+
+    const participants = await TournamentParticipant.find({ tournamentId });
+
+    // Refund entry fees to participants if tournament was still ACTIVE
+    if (tournament.status === 'ACTIVE' && tournament.entryFee > 0 && participants.length > 0) {
+      for (const p of participants) {
+        await User.findByIdAndUpdate(p.userId, {
+          $inc: { walletBalance: tournament.entryFee, tournamentsPlayed: -1 },
+        });
+
+        await WalletTransaction.create({
+          userId: p.userId,
+          type: 'DEPOSIT',
+          amount: tournament.entryFee,
+          status: 'APPROVED',
+          tournamentId: tournament._id,
+          paymentDetails: {
+            method: 'REFUND',
+            notes: `Refund for deleted tournament: ${tournament.title}`,
+          },
+        });
+      }
+    }
+
+    // Delete all participants and the tournament
+    await TournamentParticipant.deleteMany({ tournamentId });
+    await Tournament.findByIdAndDelete(tournamentId);
+
+    return res.json({
+      success: true,
+      message: `Tournament "${tournament.title}" deleted successfully! ${
+        participants.length > 0 && tournament.status === 'ACTIVE' && tournament.entryFee > 0
+          ? `Refunded ${participants.length} participant(s).`
+          : ''
+      }`,
+    });
+  } catch (error) {
+    console.error('[deleteTournament] Error:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

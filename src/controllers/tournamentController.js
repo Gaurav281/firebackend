@@ -38,6 +38,7 @@ export const getTournaments = async (req, res) => {
               turnsLeft: userPart.turnsLeft,
               totalTurns: userPart.totalTurns,
               bestScore: userPart.bestScore,
+              bestDiamonds: userPart.bestDiamonds || 0,
               rank: userPart.rank,
             }
           : {
@@ -45,6 +46,7 @@ export const getTournaments = async (req, res) => {
               turnsLeft: 0,
               totalTurns: t.turnsPerUser,
               bestScore: 0,
+              bestDiamonds: 0,
             },
       };
     });
@@ -69,9 +71,9 @@ export const getTournamentById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Tournament not found' });
     }
 
-    // Fetch leaderboard
+    // Fetch leaderboard (ranked by diamonds collected first, then score)
     const participants = await TournamentParticipant.find({ tournamentId })
-      .sort({ bestScore: -1, updatedAt: 1 })
+      .sort({ bestDiamonds: -1, bestScore: -1, updatedAt: 1 })
       .populate('userId', 'username firstName lastName photoUrl')
       .lean();
 
@@ -83,6 +85,7 @@ export const getTournamentById = async (req, res) => {
         : `${p.userId?.firstName || 'Player'} ${p.userId?.lastName || ''}`.trim(),
       photoUrl: p.userId?.photoUrl || '',
       bestScore: p.bestScore,
+      bestDiamonds: p.bestDiamonds || 0,
       turnsUsed: p.totalTurns - p.turnsLeft,
       totalTurns: p.totalTurns,
       joinedAt: p.joinedAt,
@@ -98,6 +101,7 @@ export const getTournamentById = async (req, res) => {
           turnsLeft: part.turnsLeft,
           totalTurns: part.totalTurns,
           bestScore: part.bestScore,
+          bestDiamonds: part.bestDiamonds || 0,
           rank: leaderboard.find((l) => String(l.userId) === String(userId))?.rank || null,
         };
       }
