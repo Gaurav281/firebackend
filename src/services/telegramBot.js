@@ -4,6 +4,7 @@
  * and automatically updates the chat menu button for users.
  */
 import { config } from '../config/env.js';
+import { User } from '../models/User.js';
 
 export function initTelegramBot() {
   const { botToken, miniAppUrl } = config;
@@ -84,6 +85,32 @@ export function initTelegramBot() {
               const firstName = msg.from?.first_name || 'Racer';
 
               if (text.startsWith('/start') || text.startsWith('/play')) {
+                // Auto-register / sign up the user in MongoDB
+                if (msg.from?.id) {
+                  try {
+                    const telegramId = String(msg.from.id);
+                    let user = await User.findOne({ telegramId });
+                    if (!user) {
+                      user = await User.create({
+                        telegramId,
+                        username: msg.from.username || '',
+                        firstName: msg.from.first_name || 'Racer',
+                        lastName: msg.from.last_name || '',
+                        walletBalance: 0,
+                      });
+                      console.log(`[TelegramBot] Signed up new user from /start: ${user.telegramId} (@${user.username})`);
+                    } else {
+                      user.firstName = msg.from.first_name || user.firstName;
+                      user.lastName = msg.from.last_name || user.lastName;
+                      if (msg.from.username) user.username = msg.from.username;
+                      user.lastActiveAt = new Date();
+                      await user.save();
+                    }
+                  } catch (userErr) {
+                    console.error('[TelegramBot] User signup error:', userErr.message);
+                  }
+                }
+
                 const welcomeMessage = `👋 *Welcome to FIREFLY, ${firstName}!* 🏎️💨\n\nCompete in 3-lane car racing tournaments, collect diamonds, and climb the leaderboard to win real rewards.\n\nTap the button below to start racing!`;
 
                 // 1. Send welcome message with mini app button

@@ -17,6 +17,9 @@ import adminRoutes from './routes/adminRoutes.js';
 
 const app = express();
 
+// Trust reverse proxy (Render, Cloudflare, Vercel load balancers)
+app.set('trust proxy', 1);
+
 // Security Middleware
 app.use(
   helmet({
@@ -55,6 +58,7 @@ const apiLimiter = rateLimit({
   max: 1000, // limit each IP to 1000 requests per window
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
   message: { success: false, message: 'Too many requests, please try again later.' },
 });
 app.use('/api/', apiLimiter);
