@@ -17,20 +17,40 @@ export function initTelegramBot() {
   let offset = 0;
   let isRunning = true;
 
-  // Set default bot menu button and commands on startup
+  // Set default bot menu button, description, bio, and commands on startup
   async function configureBotDefaults() {
     try {
+      // 1. Only keep /start command (removed /play)
       await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           commands: [
-            { command: 'start', description: 'Open Firefly car tournament mini app' },
-            { command: 'play', description: 'Launch car racing tournament' },
+            { command: 'start', description: 'Start Firefly and launch racing mini app' },
           ],
         }),
       });
 
+      // 2. Set default and language-specific bio & description (prevents affiliate spam hijack)
+      const bioText = '🏎️ Play 3-lane car racing tournaments, collect diamonds & win real rewards on Firefly!';
+      const descText = '🏎️ Welcome to Firefly! Race in fast-paced 3-lane tournaments, collect diamonds, dodge oncoming traffic, and climb the leaderboard to win real cash rewards.';
+      const cleanLangs = ['', 'en', 'ru', 'hi', 'es', 'zh', 'ar', 'pt', 'de', 'fr'];
+
+      for (const l of cleanLangs) {
+        fetch(`https://api.telegram.org/bot${botToken}/setMyShortDescription`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ short_description: bioText, language_code: l }),
+        }).catch(() => {});
+
+        fetch(`https://api.telegram.org/bot${botToken}/setMyDescription`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description: descText, language_code: l }),
+        }).catch(() => {});
+      }
+
+      // 3. Set bottom chat menu web app button
       await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -43,7 +63,7 @@ export function initTelegramBot() {
         }),
       });
 
-      console.log(`[TelegramBot] Bot defaults configured (Mini App URL: ${miniAppUrl})`);
+      console.log(`[TelegramBot] Bot defaults configured (Commands: /start, Mini App URL: ${miniAppUrl})`);
     } catch (err) {
       console.warn('[TelegramBot] configureBotDefaults warning:', err.message);
     }
@@ -111,7 +131,11 @@ export function initTelegramBot() {
                   }
                 }
 
-                const welcomeMessage = `👋 *Welcome to FIREFLY, ${firstName}!* 🏎️💨\n\nCompete in 3-lane car racing tournaments, collect diamonds, and climb the leaderboard to win real rewards.\n\nTap the button below to start racing!`;
+                const username = msg.from?.username
+                  ? `@${msg.from.username}`
+                  : (msg.from?.first_name || 'Racer');
+
+                const welcomeMessage = `👋 Welcome to FIREFLY, ${username}! 🏎️💨\n\nPlay car racing tournaments, collect diamonds, and climb the leaderboard to win real rewards.\nTap the button below to start racing!`;
 
                 // 1. Send welcome message with mini app button
                 await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {

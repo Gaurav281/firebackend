@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { Tournament } from '../models/Tournament.js';
 import { TournamentParticipant } from '../models/TournamentParticipant.js';
 import { User } from '../models/User.js';
@@ -129,16 +130,44 @@ export const getTournamentById = async (req, res) => {
 };
 
 export const joinTournament = async (req, res) => {
-  try {
-    const { tournamentId } = req.params;
-    const userId = req.user._id;
+  const { tournamentId } = req.params;
+  const userId = req.user._id;
 
-    const tournament = await Tournament.findById(tournamentId);
+  let session = null;
+  let useTransaction = false;
+
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+    useTransaction = true;
+  } catch (sessErr) {
+    session = null;
+    useTransaction = false;
+  }
+
+  try {
+    // 1. Check if user already joined
+    const alreadyJoinedQuery = TournamentParticipant.findOne({ tournamentId, userId });
+    if (useTransaction) alreadyJoinedQuery.session(session);
+    const alreadyJoined = await alreadyJoinedQuery;
+
+    if (alreadyJoined) {
+      if (useTransaction) await session.abortTransaction();
+      return res.status(400).json({ success: false, message: 'You have already joined this tournament.' });
+    }
+
+    // 2. Fetch tournament to check existence & status
+    const tQuery = Tournament.findById(tournamentId);
+    if (useTransaction) tQuery.session(session);
+    const tournament = await tQuery;
+
     if (!tournament) {
+      if (useTransaction) await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Tournament not found' });
     }
 
     if (tournament.status !== 'ACTIVE') {
+      if (useTransaction) await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: `Tournament is no longer active (Status: ${tournament.status})`,
@@ -146,23 +175,41 @@ export const joinTournament = async (req, res) => {
     }
 
     if (new Date() >= new Date(tournament.endTime)) {
+      if (useTransaction) await session.abortTransaction();
       return res.status(400).json({ success: false, message: 'This tournament has already ended.' });
     }
 
-    if (tournament.currentParticipantsCount >= tournament.totalParticipantsAllowed) {
-      return res.status(400).json({ success: false, message: 'Tournament is full.' });
+    // 3. ATOMIC SEAT RESERVATION:
+    // Even if multiple users click simultaneously when only 1 seat remains,
+    // MongoDB's atomic findOneAndUpdate with $expr: { $lt: ['$currentParticipantsCount', '$totalParticipantsAllowed'] }
+    // guarantees that exactly ONE operation matches and increments. All other concurrent requests match 0 docs and are rejected.
+    const reserveSeatQuery = Tournament.findOneAndUpdate(
+      {
+        _id: tournamentId,
+        status: 'ACTIVE',
+        endTime: { $gt: new Date() },
+        $expr: { $lt: ['$currentParticipantsCount', '$totalParticipantsAllowed'] },
+      },
+      {
+        $inc: { currentParticipantsCount: 1 },
+      },
+      { new: true }
+    );
+    if (useTransaction) reserveSeatQuery.session(session);
+    const reservedTournament = await reserveSeatQuery;
+
+    if (!reservedTournament) {
+      if (useTransaction) await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'Tournament is full. All seats have been occupied.',
+      });
     }
 
-    // Check if user already joined
-    const alreadyJoined = await TournamentParticipant.findOne({ tournamentId, userId });
-    if (alreadyJoined) {
-      return res.status(400).json({ success: false, message: 'You have already joined this tournament.' });
-    }
-
-    // Atomic deduction of entry fee if fee > 0
+    // 4. ATOMIC WALLET DEDUCTION (Only executed AFTER seat reservation succeeded)
     let updatedUser = null;
     if (tournament.entryFee > 0) {
-      updatedUser = await User.findOneAndUpdate(
+      const userDeductQuery = User.findOneAndUpdate(
         {
           _id: userId,
           walletBalance: { $gte: tournament.entryFee },
@@ -172,8 +219,16 @@ export const joinTournament = async (req, res) => {
         },
         { new: true }
       );
+      if (useTransaction) userDeductQuery.session(session);
+      updatedUser = await userDeductQuery;
 
       if (!updatedUser) {
+        // Insufficient funds: release reserved seat
+        if (useTransaction) {
+          await session.abortTransaction();
+        } else {
+          await Tournament.findByIdAndUpdate(tournamentId, { $inc: { currentParticipantsCount: -1 } });
+        }
         return res.status(400).json({
           success: false,
           message: `Insufficient wallet balance. Entry fee is ₹${tournament.entryFee}. Please add funds to your wallet.`,
@@ -181,7 +236,7 @@ export const joinTournament = async (req, res) => {
       }
 
       // Log wallet transaction
-      await WalletTransaction.create({
+      const txnRecord = {
         userId,
         type: 'TOURNAMENT_ENTRY',
         amount: tournament.entryFee,
@@ -189,54 +244,60 @@ export const joinTournament = async (req, res) => {
         balanceAfter: updatedUser.walletBalance,
         tournamentId: tournament._id,
         description: `Entry fee for tournament: "${tournament.title}"`,
-      });
+      };
+
+      if (useTransaction) {
+        await WalletTransaction.create([txnRecord], { session });
+      } else {
+        await WalletTransaction.create(txnRecord);
+      }
     } else {
       // Free tournament
-      updatedUser = await User.findByIdAndUpdate(
+      const userIncQuery = User.findByIdAndUpdate(
         userId,
         { $inc: { tournamentsPlayed: 1 } },
         { new: true }
       );
+      if (useTransaction) userIncQuery.session(session);
+      updatedUser = await userIncQuery;
     }
 
-    // Increment participant count with safety check
-    const updatedTournament = await Tournament.findOneAndUpdate(
-      {
-        _id: tournamentId,
-        currentParticipantsCount: { $lt: tournament.totalParticipantsAllowed },
-      },
-      {
-        $inc: { currentParticipantsCount: 1 },
-      },
-      { new: true }
-    );
+    // 5. CREATE PARTICIPANT RECORD
+    let participant = null;
+    try {
+      const pData = {
+        tournamentId,
+        userId,
+        turnsLeft: tournament.turnsPerUser,
+        totalTurns: tournament.turnsPerUser,
+        bestScore: 0,
+        bestDiamonds: 0,
+      };
 
-    if (!updatedTournament) {
-      // Race condition: tournament filled up between checks, refund entry fee
-      if (tournament.entryFee > 0) {
-        await User.findByIdAndUpdate(userId, {
-          $inc: { walletBalance: tournament.entryFee, tournamentsPlayed: -1 },
-        });
-        await WalletTransaction.create({
-          userId,
-          type: 'REFUND',
-          amount: tournament.entryFee,
-          status: 'SUCCESS',
-          tournamentId: tournament._id,
-          description: `Refund: Tournament filled up during entry`,
-        });
+      if (useTransaction) {
+        const created = await TournamentParticipant.create([pData], { session });
+        participant = created[0];
+      } else {
+        participant = await TournamentParticipant.create(pData);
       }
-      return res.status(400).json({ success: false, message: 'Tournament reached full capacity.' });
+    } catch (createErr) {
+      // Rollback seat reservation and refund entry fee if participant creation failed
+      if (useTransaction) {
+        await session.abortTransaction();
+      } else {
+        await Tournament.findByIdAndUpdate(tournamentId, { $inc: { currentParticipantsCount: -1 } });
+        if (tournament.entryFee > 0) {
+          await User.findByIdAndUpdate(userId, {
+            $inc: { walletBalance: tournament.entryFee, tournamentsPlayed: -1 },
+          });
+        }
+      }
+      return res.status(400).json({ success: false, message: 'You have already joined this tournament.' });
     }
 
-    // Create participant entry
-    const participant = await TournamentParticipant.create({
-      tournamentId,
-      userId,
-      turnsLeft: tournament.turnsPerUser,
-      totalTurns: tournament.turnsPerUser,
-      bestScore: 0,
-    });
+    if (useTransaction) {
+      await session.commitTransaction();
+    }
 
     return res.status(200).json({
       success: true,
@@ -247,13 +308,20 @@ export const joinTournament = async (req, res) => {
         turnsLeft: participant.turnsLeft,
         totalTurns: participant.totalTurns,
         bestScore: participant.bestScore,
+        bestDiamonds: participant.bestDiamonds,
       },
     });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: 'You have already joined this tournament.' });
+    if (useTransaction && session) {
+      try {
+        await session.abortTransaction();
+      } catch (e) {}
     }
     console.error('[joinTournament] Error:', error);
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    if (session) {
+      session.endSession();
+    }
   }
 };
