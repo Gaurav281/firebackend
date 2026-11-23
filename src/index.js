@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config/env.js';
 import { connectDB } from './config/db.js';
 import { initSystemDefaults } from './models/SystemConfig.js';
+import { initTelegramBot } from './services/telegramBot.js';
 
 // Route imports
 import authRoutes from './routes/authRoutes.js';
@@ -99,6 +100,9 @@ const startServer = async () => {
     console.log(`🚀 Car Tournament Server running on http://localhost:${config.port}`);
     console.log(`🤖 Telegram Bot Username: @${config.botUsername}`);
     console.log(`🛡️  Admin key configured`);
+
+    // Start Telegram Bot listener for /start command & menu button sync
+    initTelegramBot();
   });
 
   return server;
