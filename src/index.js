@@ -63,8 +63,8 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
-// Health check endpoint (for Render / uptime monitoring)
-app.get('/health', (req, res) => {
+// Health check endpoints (for Render / uptime monitoring)
+const healthHandler = (req, res) => {
   res.json({
     status: 'ok',
     uptime: process.uptime(),
@@ -72,7 +72,9 @@ app.get('/health', (req, res) => {
     service: 'Car Tournament API',
     botUsername: config.botUsername,
   });
-});
+};
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
 // Mount API routes
 app.use('/api/auth', authRoutes);
