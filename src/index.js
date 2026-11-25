@@ -7,6 +7,7 @@ import { config } from './config/env.js';
 import { connectDB } from './config/db.js';
 import { initSystemDefaults } from './models/SystemConfig.js';
 import { initTelegramBot } from './services/telegramBot.js';
+import { initKeepAlive } from './services/keepAlive.js';
 
 // Route imports
 import authRoutes from './routes/authRoutes.js';
@@ -109,6 +110,9 @@ const startServer = async () => {
 
     // Start Telegram Bot listener for /start command & menu button sync
     initTelegramBot();
+
+    // Start 14-minute self-ping keep-alive service for Render free tier
+    initKeepAlive();
   });
 
   return server;

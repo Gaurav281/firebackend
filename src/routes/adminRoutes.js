@@ -10,6 +10,7 @@ import {
   rejectWithdrawal,
   updateUpiConfig,
   getAdminStats,
+  broadcastMessage,
 } from '../controllers/adminController.js';
 import { requireAdmin } from '../middleware/adminAuth.js';
 
@@ -28,5 +29,6 @@ router.post('/transactions/deposit/:transactionId/reject', rejectDeposit);
 router.post('/transactions/withdraw/:transactionId/approve', approveWithdrawal);
 router.post('/transactions/withdraw/:transactionId/reject', rejectWithdrawal);
 router.post('/config/upi', updateUpiConfig);
+router.post('/broadcast', broadcastMessage);
 
 export default router;

@@ -4,6 +4,7 @@ import { User } from '../models/User.js';
 import { WalletTransaction } from '../models/WalletTransaction.js';
 import { getSystemConfig, setSystemConfig } from '../models/SystemConfig.js';
 import { config } from '../config/env.js';
+import { sendTelegramMessage } from '../services/telegramBot.js';
 
 export const createTournament = async (req, res) => {
   try {
@@ -488,6 +489,65 @@ export const deleteTournament = async (req, res) => {
     });
   } catch (error) {
     console.error('[deleteTournament] Error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Broadcast message to all registered Telegram users with a Mini App button
+ */
+export const broadcastMessage = async (req, res) => {
+  try {
+    const { message, buttonText = '🎮 Play Firefly' } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, message: 'Broadcast message content is required' });
+    }
+
+    // Find all users who have a valid telegramId
+    const users = await User.find(
+      { telegramId: { $exists: true, $ne: '' } },
+      'telegramId username firstName'
+    );
+
+    if (!users || users.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No registered Telegram users found to broadcast to.',
+        totalTargeted: 0,
+        sentCount: 0,
+        failedCount: 0,
+      });
+    }
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    // Send in sequence with throttle to respect Telegram API rate limits (30 msgs/sec max)
+    for (const u of users) {
+      try {
+        await sendTelegramMessage(u.telegramId, message.trim(), {
+          buttonText: buttonText.trim() || '🎮 Play Firefly',
+          includeWebAppButton: true,
+        });
+        sentCount++;
+      } catch (err) {
+        failedCount++;
+      }
+
+      // 35ms sleep between sends (~28 msg/sec)
+      await new Promise((resolve) => setTimeout(resolve, 35));
+    }
+
+    return res.json({
+      success: true,
+      message: `Broadcast delivered: ${sentCount} sent, ${failedCount} failed out of ${users.length} users.`,
+      totalTargeted: users.length,
+      sentCount,
+      failedCount,
+    });
+  } catch (error) {
+    console.error('[broadcastMessage] Error:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

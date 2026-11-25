@@ -1,10 +1,58 @@
 /**
  * Telegram Bot Service for Firefly
  * Handles /start command, sends welcome message with mini app button,
- * and automatically updates the chat menu button for users.
+ * updates chat menu button, and provides messaging utility for broadcasts.
  */
 import { config } from '../config/env.js';
 import { User } from '../models/User.js';
+
+/**
+ * Send a message to a Telegram chat/user with optional inline web app button
+ */
+export async function sendTelegramMessage(chatId, text, options = {}) {
+  const { botToken, miniAppUrl } = config;
+  if (!botToken) {
+    throw new Error('Telegram bot token not configured');
+  }
+
+  const {
+    buttonText = '🎮 Play Firefly',
+    includeWebAppButton = true,
+    parseMode = 'Markdown',
+  } = options;
+
+  const payload = {
+    chat_id: chatId,
+    text,
+    parse_mode: parseMode,
+  };
+
+  if (includeWebAppButton) {
+    payload.reply_markup = {
+      inline_keyboard: [
+        [
+          {
+            text: buttonText,
+            web_app: { url: miniAppUrl },
+          },
+        ],
+      ],
+    };
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error(data.description || 'Failed to send Telegram message');
+  }
+
+  return data;
+}
 
 export function initTelegramBot() {
   const { botToken, miniAppUrl } = config;
@@ -20,6 +68,13 @@ export function initTelegramBot() {
   // Set default bot menu button, description, bio, and commands on startup
   async function configureBotDefaults() {
     try {
+      // 0. Ensure no stale webhook is blocking getUpdates
+      await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ drop_pending_updates: false }),
+      }).catch(() => {});
+
       // 1. Only keep /start command (removed /play)
       await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
         method: 'POST',
@@ -31,9 +86,9 @@ export function initTelegramBot() {
         }),
       });
 
-      // 2. Set default and language-specific bio & description (prevents affiliate spam hijack)
-      const bioText = '🏎️ Play 3-lane car racing tournaments, collect diamonds & win real rewards on Firefly!';
-      const descText = '🏎️ Welcome to Firefly! Race in fast-paced 3-lane tournaments, collect diamonds, dodge oncoming traffic, and climb the leaderboard to win real cash rewards.';
+      // 2. Set default and language-specific bio & description (no 3-lane mentions, prevents spam overwrite)
+      const bioText = 'Play. Compete. Earn. 🏎️💨\nJoin car racing tournaments, collect diamonds & win real rewards on Firefly!';
+      const descText = 'Welcome to Firefly! 🏎️💨\n\nPlay. Compete. Earn.\n\nJoin fast-paced car racing tournaments, collect diamonds, climb the leaderboard, and win real rewards.';
       const cleanLangs = ['', 'en', 'ru', 'hi', 'es', 'zh', 'ar', 'pt', 'de', 'fr'];
 
       for (const l of cleanLangs) {
@@ -73,18 +128,18 @@ export function initTelegramBot() {
 
   // Long-polling updates loop
   async function poll() {
-    console.log('[TelegramBot] Long polling started for @' + config.botUsername);
+    console.log('[TelegramBot] Long polling active for @' + config.botUsername);
 
     while (isRunning) {
       try {
         const response = await fetch(
-          `https://api.telegram.org/bot${botToken}/getUpdates?offset=${offset}&timeout=25`,
-          { signal: AbortSignal.timeout(35000) }
+          `https://api.telegram.org/bot${botToken}/getUpdates?offset=${offset}&timeout=20`,
+          { signal: AbortSignal.timeout(30000) }
         );
 
         if (!response.ok) {
           if (response.status === 409) {
-            // Another instance running, back off
+            // Another instance running or conflict, wait and retry
             await new Promise((r) => setTimeout(r, 6000));
             continue;
           }
@@ -102,7 +157,6 @@ export function initTelegramBot() {
               const msg = update.message;
               const chatId = msg.chat?.id;
               const text = (msg.text || '').trim();
-              const firstName = msg.from?.first_name || 'Racer';
 
               if (text.startsWith('/start') || text.startsWith('/play')) {
                 // Auto-register / sign up the user in MongoDB
@@ -118,7 +172,7 @@ export function initTelegramBot() {
                         lastName: msg.from.last_name || '',
                         walletBalance: 0,
                       });
-                      console.log(`[TelegramBot] Signed up new user from /start: ${user.telegramId} (@${user.username})`);
+                      console.log(`[TelegramBot] Registered user from /start: ${user.telegramId} (@${user.username})`);
                     } else {
                       user.firstName = msg.from.first_name || user.firstName;
                       user.lastName = msg.from.last_name || user.lastName;
@@ -127,7 +181,7 @@ export function initTelegramBot() {
                       await user.save();
                     }
                   } catch (userErr) {
-                    console.error('[TelegramBot] User signup error:', userErr.message);
+                    console.error('[TelegramBot] User registration error:', userErr.message);
                   }
                 }
 
@@ -135,27 +189,14 @@ export function initTelegramBot() {
                   ? `@${msg.from.username}`
                   : (msg.from?.first_name || 'Racer');
 
-                const welcomeMessage = `👋 Welcome to FIREFLY, ${username}! 🏎️💨\n\nPlay car racing tournaments, collect diamonds, and climb the leaderboard to win real rewards.\nTap the button below to start racing!`;
+                // Simple and clear message requested:
+                // "welcome <username> , play . compete . earn and button to open the mini app"
+                const welcomeMessage = `👋 Welcome ${username}!\n\n🏎️ Play. Compete. Earn.\n\nTap the button below to start racing and win real rewards!`;
 
                 // 1. Send welcome message with mini app button
-                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    chat_id: chatId,
-                    text: welcomeMessage,
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                      inline_keyboard: [
-                        [
-                          {
-                            text: '🎮 Play Firefly',
-                            web_app: { url: miniAppUrl },
-                          },
-                        ],
-                      ],
-                    },
-                  }),
+                await sendTelegramMessage(chatId, welcomeMessage, {
+                  buttonText: '🎮 Play Firefly',
+                  includeWebAppButton: true,
                 }).catch((e) => console.error('[TelegramBot] sendMessage error:', e.message));
 
                 // 2. Automatically update chat menu button for this chat
