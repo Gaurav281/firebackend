@@ -54,6 +54,42 @@ export async function sendTelegramMessage(chatId, text, options = {}) {
   return data;
 }
 
+/**
+ * Check if a Telegram user is a member of a channel/group via Telegram Bot API getChatMember
+ */
+export async function checkChatMembership(chatIdOrUsername, telegramUserId) {
+  const { botToken } = config;
+  if (!botToken || !chatIdOrUsername || !telegramUserId) {
+    return { ok: false, isMember: false, error: 'Missing parameters' };
+  }
+
+  try {
+    let cleanChat = chatIdOrUsername.trim();
+    if (!cleanChat.startsWith('@') && !cleanChat.startsWith('-')) {
+      cleanChat = cleanChat.replace(/^https?:\/\/t\.me\//, '');
+      cleanChat = `@${cleanChat}`;
+    }
+
+    const res = await fetch(
+      `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${encodeURIComponent(cleanChat)}&user_id=${encodeURIComponent(telegramUserId)}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+
+    const data = await res.json();
+    if (!data.ok) {
+      console.warn(`[TelegramBot] getChatMember warning for ${cleanChat}:`, data.description);
+      return { ok: false, isMember: false, description: data.description };
+    }
+
+    const status = data.result?.status;
+    const isMember = ['creator', 'administrator', 'member', 'restricted'].includes(status);
+    return { ok: true, isMember, status };
+  } catch (err) {
+    console.error(`[TelegramBot] getChatMember network error:`, err.message);
+    return { ok: false, isMember: false, error: err.message };
+  }
+}
+
 export function initTelegramBot() {
   const { botToken, miniAppUrl } = config;
 

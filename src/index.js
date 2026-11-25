@@ -15,6 +15,7 @@ import walletRoutes from './routes/walletRoutes.js';
 import tournamentRoutes from './routes/tournamentRoutes.js';
 import gameRoutes from './routes/gameRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import systemRoutes from './routes/systemRoutes.js';
 
 const app = express();
 
@@ -83,6 +84,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/tournaments', tournamentRoutes);
 app.use('/api/game', gameRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/system', systemRoutes);
 
 // 404 Handler
 app.use((req, res) => {

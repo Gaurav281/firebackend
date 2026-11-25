@@ -2,6 +2,7 @@ import { Tournament } from '../models/Tournament.js';
 import { TournamentParticipant } from '../models/TournamentParticipant.js';
 import { User } from '../models/User.js';
 import { WalletTransaction } from '../models/WalletTransaction.js';
+import { RequiredChat } from '../models/RequiredChat.js';
 import { getSystemConfig, setSystemConfig } from '../models/SystemConfig.js';
 import { config } from '../config/env.js';
 import { sendTelegramMessage } from '../services/telegramBot.js';
@@ -548,6 +549,92 @@ export const broadcastMessage = async (req, res) => {
     });
   } catch (error) {
     console.error('[broadcastMessage] Error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Required Chats CRUD for Admin
+ */
+export const getAdminRequiredChats = async (req, res) => {
+  try {
+    const chats = await RequiredChat.find().sort({ order: 1, createdAt: -1 });
+    return res.json({ success: true, chats });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const createRequiredChat = async (req, res) => {
+  try {
+    const { title, type = 'channel', link, chatUsernameOrId = '', isActive = true, order = 0 } = req.body;
+
+    if (!title || !title.trim() || !link || !link.trim()) {
+      return res.status(400).json({ success: false, message: 'Title and Telegram link are required' });
+    }
+
+    const newChat = await RequiredChat.create({
+      title: title.trim(),
+      type,
+      link: link.trim(),
+      chatUsernameOrId: chatUsernameOrId.trim(),
+      isActive: Boolean(isActive),
+      order: Number(order) || 0,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Required Telegram chat added successfully',
+      chat: newChat,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const updateRequiredChat = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, type, link, chatUsernameOrId, isActive, order } = req.body;
+
+    const chat = await RequiredChat.findById(id);
+    if (!chat) {
+      return res.status(404).json({ success: false, message: 'Required chat not found' });
+    }
+
+    if (title) chat.title = title.trim();
+    if (type) chat.type = type;
+    if (link) chat.link = link.trim();
+    if (chatUsernameOrId !== undefined) chat.chatUsernameOrId = chatUsernameOrId.trim();
+    if (isActive !== undefined) chat.isActive = Boolean(isActive);
+    if (order !== undefined) chat.order = Number(order);
+
+    await chat.save();
+
+    return res.json({
+      success: true,
+      message: 'Required Telegram chat updated successfully',
+      chat,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const deleteRequiredChat = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await RequiredChat.findByIdAndDelete(id);
+
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: 'Required chat not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Required chat removed successfully',
+    });
+  } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };

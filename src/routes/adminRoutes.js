@@ -11,6 +11,10 @@ import {
   updateUpiConfig,
   getAdminStats,
   broadcastMessage,
+  getAdminRequiredChats,
+  createRequiredChat,
+  updateRequiredChat,
+  deleteRequiredChat,
 } from '../controllers/adminController.js';
 import { requireAdmin } from '../middleware/adminAuth.js';
 
@@ -30,5 +34,9 @@ router.post('/transactions/withdraw/:transactionId/approve', approveWithdrawal);
 router.post('/transactions/withdraw/:transactionId/reject', rejectWithdrawal);
 router.post('/config/upi', updateUpiConfig);
 router.post('/broadcast', broadcastMessage);
+router.get('/required-chats', getAdminRequiredChats);
+router.post('/required-chats', createRequiredChat);
+router.put('/required-chats/:id', updateRequiredChat);
+router.delete('/required-chats/:id', deleteRequiredChat);
 
 export default router;

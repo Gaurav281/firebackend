@@ -63,6 +63,15 @@ const userSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    hasCompletedRequiredChats: {
+      type: Boolean,
+      default: false,
+    },
+    joinedChats: [
+      {
+        type: String,
+      },
+    ],
     lastActiveAt: {
       type: Date,
       default: Date.now,
