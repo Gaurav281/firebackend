@@ -292,6 +292,7 @@ export const joinTournament = async (req, res) => {
 
     // Process referral code if passed by joining user
     let referrerParticipant = null;
+    let isReferralValid = false;
     if (inputCode && typeof inputCode === 'string' && inputCode.trim()) {
       const cleanCode = inputCode.trim();
       referrerParticipant = await TournamentParticipant.findOne({
@@ -305,23 +306,30 @@ export const joinTournament = async (req, res) => {
         referrerParticipant.totalTurns += 1;
         referrerParticipant.referralBonusTurnsEarned = (referrerParticipant.referralBonusTurnsEarned || 0) + 1;
         await referrerParticipant.save();
+        isReferralValid = true;
         console.log(`[Referral] User ${userId} joined tournament ${tournamentId} with code ${cleanCode}. Referrer ${referrerParticipant.userId} earned +1 extra turn!`);
       }
     }
 
     // 6. CREATE PARTICIPANT RECORD
+    // Both user who shared code AND friend who used code get +1 extra turn!
+    const baseTurns = tournament.turnsPerUser;
+    const initialTurns = isReferralValid ? baseTurns + 1 : baseTurns;
+    const bonusTurnsEarned = isReferralValid ? 1 : 0;
+
     let participant = null;
     try {
       const pData = {
         tournamentId,
         userId,
-        turnsLeft: tournament.turnsPerUser,
-        totalTurns: tournament.turnsPerUser,
+        turnsLeft: initialTurns,
+        totalTurns: initialTurns,
         bestScore: 0,
         bestDiamonds: 0,
         referralCode,
-        referredBy: referrerParticipant ? referrerParticipant.userId : null,
-        usedReferralCode: referrerParticipant ? inputCode.trim() : '',
+        referredBy: isReferralValid ? referrerParticipant.userId : null,
+        usedReferralCode: isReferralValid ? inputCode.trim() : '',
+        referralBonusTurnsEarned: bonusTurnsEarned,
       };
 
       if (useTransaction) {
@@ -351,8 +359,8 @@ export const joinTournament = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: referrerParticipant
-        ? `Joined tournament! Friend got +1 turn. Your referral code is ${referralCode}`
+      message: isReferralValid
+        ? `Joined tournament! Both you and your friend got +1 extra turn! Your referral code is ${referralCode}`
         : `Successfully joined tournament! Your referral code is ${referralCode}`,
       walletBalance: updatedUser.walletBalance,
       referralCode,
