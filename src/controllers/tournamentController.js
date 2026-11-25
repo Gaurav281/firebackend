@@ -29,6 +29,13 @@ export const getTournaments = async (req, res) => {
       const userPart = participationMap.get(String(t._id));
       const isEnded = now >= new Date(t.endTime) || t.status === 'ENDED' || t.status === 'DECLARED';
 
+      let userRefCode = userPart ? userPart.referralCode : '';
+      if (userPart && !userRefCode) {
+        userRefCode = Math.floor(100000 + Math.random() * 900000).toString();
+        TournamentParticipant.findByIdAndUpdate(userPart._id, { referralCode: userRefCode }).catch(console.error);
+        userPart.referralCode = userRefCode;
+      }
+
       return {
         ...t,
         isFull: t.currentParticipantsCount >= t.totalParticipantsAllowed,
@@ -36,7 +43,7 @@ export const getTournaments = async (req, res) => {
         userParticipation: userPart
           ? {
               isJoined: true,
-              referralCode: userPart.referralCode || '',
+              referralCode: userRefCode,
               turnsLeft: userPart.turnsLeft,
               totalTurns: userPart.totalTurns,
               bestScore: userPart.bestScore,
@@ -372,3 +379,59 @@ export const joinTournament = async (req, res) => {
     }
   }
 };
+
+/**
+ * Join a tournament directly using a friend's 6-digit referral code
+ * Finds the tournament automatically from the code, validates entry, and joins!
+ */
+export const joinTournamentByCode = async (req, res) => {
+  try {
+    const { referralCode: inputCode } = req.body || {};
+    const userId = req.user ? req.user._id : null;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    if (!inputCode || typeof inputCode !== 'string' || !inputCode.trim()) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid 6-digit tournament code' });
+    }
+
+    const cleanCode = inputCode.trim();
+
+    // 1. Locate the participant record that owns this referral code
+    const referrerParticipant = await TournamentParticipant.findOne({ referralCode: cleanCode });
+    if (!referrerParticipant) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid tournament code. Please check the 6-digit code and try again.',
+      });
+    }
+
+    if (String(referrerParticipant.userId) === String(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot use your own referral code!',
+      });
+    }
+
+    const tournamentId = referrerParticipant.tournamentId;
+
+    // Check if user already joined this tournament
+    const alreadyJoined = await TournamentParticipant.findOne({ tournamentId, userId });
+    if (alreadyJoined) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have already joined this tournament!',
+      });
+    }
+
+    // Set tournamentId on req.params and delegate to atomic join logic
+    req.params.tournamentId = String(tournamentId);
+    return await joinTournament(req, res);
+  } catch (error) {
+    console.error('[joinTournamentByCode] Error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+

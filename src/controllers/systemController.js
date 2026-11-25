@@ -3,14 +3,18 @@ import { User } from '../models/User.js';
 import { checkChatMembership } from '../services/telegramBot.js';
 
 /**
- * Get active required chats for the client with fast background auto-verification
+ * Get active required chats for the client with strict validation
+ * Ensures that EVERY currently active chat must be joined.
  */
 export const getRequiredChats = async (req, res) => {
   try {
     const chats = await RequiredChat.find({ isActive: true }).sort({ order: 1, createdAt: 1 });
     
-    // If no required chats exist, always verified
+    // If no active required chats exist in the system, all users are verified
     if (chats.length === 0) {
+      if (req.user) {
+        await User.findByIdAndUpdate(req.user._id, { hasCompletedRequiredChats: true });
+      }
       return res.json({
         success: true,
         requiredChats: [],
@@ -25,46 +29,42 @@ export const getRequiredChats = async (req, res) => {
     if (req.user) {
       const user = await User.findById(req.user._id);
       if (user) {
-        if (user.hasCompletedRequiredChats) {
-          userVerified = true;
-          userJoinedList = user.joinedChats || [];
-        } else {
-          // Fast auto-check during loading screen
-          const telegramId = user.telegramId;
-          const joinedChatIds = new Set(user.joinedChats || []);
-          let allJoinedSoFar = true;
+        const joinedChatIds = new Set((user.joinedChats || []).map(String));
+        const telegramId = user.telegramId;
 
-          // Check chats via getChatMember in parallel for near-zero latency
+        // Identify which active chats are not yet in user's joined list
+        const unverifiedChats = chats.filter((c) => !joinedChatIds.has(String(c._id)));
+
+        // If there are unverified chats and user has a telegramId, try fast auto-check via getChatMember
+        if (unverifiedChats.length > 0 && telegramId) {
           await Promise.all(
-            chats.map(async (chat) => {
-              if (joinedChatIds.has(String(chat._id))) {
-                return;
-              }
-
+            unverifiedChats.map(async (chat) => {
               const targetHandle = chat.chatUsernameOrId || chat.link;
               if (chat.type === 'bot' || !targetHandle) {
                 return;
               }
 
-              const check = await checkChatMembership(targetHandle, telegramId);
-              if (check.ok && check.isMember) {
-                joinedChatIds.add(String(chat._id));
-              } else {
-                allJoinedSoFar = false;
+              try {
+                const check = await checkChatMembership(targetHandle, telegramId);
+                if (check.ok && check.isMember) {
+                  joinedChatIds.add(String(chat._id));
+                }
+              } catch (e) {
+                // Ignore transient lookup errors
               }
             })
           );
-
-          user.joinedChats = Array.from(joinedChatIds);
-          userJoinedList = user.joinedChats;
-
-          const requiredCheckCount = chats.filter((c) => c.type !== 'bot').length;
-          if (allJoinedSoFar && joinedChatIds.size >= requiredCheckCount) {
-            user.hasCompletedRequiredChats = true;
-            userVerified = true;
-          }
-          await user.save();
         }
+
+        user.joinedChats = Array.from(joinedChatIds);
+
+        // User is verified IF AND ONLY IF every active required chat is in joinedChatIds
+        const allActiveJoined = chats.every((chat) => joinedChatIds.has(String(chat._id)));
+        user.hasCompletedRequiredChats = allActiveJoined;
+        await user.save();
+
+        userVerified = allActiveJoined;
+        userJoinedList = user.joinedChats;
       }
     }
 
@@ -97,16 +97,19 @@ export const verifyChatJoins = async (req, res) => {
       return res.json({
         success: true,
         allJoined: true,
+        joinedChats: user.joinedChats || [],
         message: 'All chats verified!',
       });
     }
 
     const telegramId = user.telegramId;
     const missingChats = [];
-    const joinedChatIds = new Set(user.joinedChats || []);
+    const joinedChatIds = new Set((user.joinedChats || []).map(String));
+    const clientConfirmed = new Set((req.body?.clientConfirmedIds || []).map(String));
 
     for (const chat of chats) {
-      if (joinedChatIds.has(String(chat._id))) {
+      const chatIdStr = String(chat._id);
+      if (joinedChatIds.has(chatIdStr)) {
         continue;
       }
 
@@ -114,8 +117,8 @@ export const verifyChatJoins = async (req, res) => {
 
       // Bot link: consider joined if client confirms clicked
       if (chat.type === 'bot' || !targetHandle) {
-        if (req.body?.clientConfirmedIds?.includes(String(chat._id))) {
-          joinedChatIds.add(String(chat._id));
+        if (clientConfirmed.has(chatIdStr)) {
+          joinedChatIds.add(chatIdStr);
         } else {
           missingChats.push(chat.title);
         }
@@ -123,18 +126,20 @@ export const verifyChatJoins = async (req, res) => {
       }
 
       // Check via Telegram Bot API getChatMember
-      const check = await checkChatMembership(targetHandle, telegramId);
-
-      if (check.ok) {
-        if (check.isMember) {
-          joinedChatIds.add(String(chat._id));
-        } else {
-          missingChats.push(chat.title);
+      let isVerified = false;
+      if (telegramId) {
+        const check = await checkChatMembership(targetHandle, telegramId);
+        if (check.ok && check.isMember) {
+          isVerified = true;
         }
+      }
+
+      if (isVerified) {
+        joinedChatIds.add(chatIdStr);
       } else {
-        // If bot is not admin in channel or error, allow client confirmation if user clicked Join
-        if (req.body?.clientConfirmedIds?.includes(String(chat._id))) {
-          joinedChatIds.add(String(chat._id));
+        // If bot is not admin in channel or error (e.g. invite link), allow client confirmation if user clicked Join
+        if (clientConfirmed.has(chatIdStr)) {
+          joinedChatIds.add(chatIdStr);
         } else {
           missingChats.push(chat.title);
         }
@@ -142,7 +147,7 @@ export const verifyChatJoins = async (req, res) => {
     }
 
     user.joinedChats = Array.from(joinedChatIds);
-    const allJoined = missingChats.length === 0;
+    const allJoined = chats.every((chat) => joinedChatIds.has(String(chat._id)));
     user.hasCompletedRequiredChats = allJoined;
     await user.save();
 
@@ -150,8 +155,9 @@ export const verifyChatJoins = async (req, res) => {
       return res.status(400).json({
         success: false,
         allJoined: false,
-        message: `You have not joined: ${missingChats.join(', ')}. Please join first!`,
+        message: `You have not joined: ${missingChats.join(', ')}. Please tap Join first!`,
         missingChats,
+        joinedChats: user.joinedChats,
         joinedCount: joinedChatIds.size,
         totalRequired: chats.length,
       });
@@ -161,6 +167,7 @@ export const verifyChatJoins = async (req, res) => {
       success: true,
       allJoined: true,
       message: 'All channels verified successfully!',
+      joinedChats: user.joinedChats,
       joinedCount: chats.length,
       totalRequired: chats.length,
     });
