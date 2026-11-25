@@ -565,19 +565,40 @@ export const getAdminRequiredChats = async (req, res) => {
   }
 };
 
+/**
+ * Helper to automatically extract Telegram handle or chat ID from any Telegram link
+ * e.g. https://t.me/fireflychannel -> @fireflychannel
+ *      t.me/fireflybot -> @fireflybot
+ */
+export function extractTelegramHandle(link) {
+  if (!link) return '';
+  let str = link.trim();
+  str = str.replace(/^https?:\/\//i, '');
+  str = str.replace(/^(t|telegram)\.me\//i, '');
+  str = str.split('?')[0].split('/')[0].replace(/\/+$/, '');
+  if (!str.startsWith('@') && !str.startsWith('-')) {
+    str = `@${str}`;
+  }
+  return str;
+}
+
 export const createRequiredChat = async (req, res) => {
   try {
-    const { title, type = 'channel', link, chatUsernameOrId = '', isActive = true, order = 0 } = req.body;
+    const { title, type = 'channel', link, isActive = true, order = 0 } = req.body;
 
     if (!title || !title.trim() || !link || !link.trim()) {
       return res.status(400).json({ success: false, message: 'Title and Telegram link are required' });
     }
 
+    const cleanLink = link.trim();
+    // Automatically extract chat handle from link if not provided
+    const chatUsernameOrId = req.body.chatUsernameOrId?.trim() || extractTelegramHandle(cleanLink);
+
     const newChat = await RequiredChat.create({
       title: title.trim(),
       type,
-      link: link.trim(),
-      chatUsernameOrId: chatUsernameOrId.trim(),
+      link: cleanLink,
+      chatUsernameOrId,
       isActive: Boolean(isActive),
       order: Number(order) || 0,
     });
@@ -595,7 +616,7 @@ export const createRequiredChat = async (req, res) => {
 export const updateRequiredChat = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, link, chatUsernameOrId, isActive, order } = req.body;
+    const { title, type, link, isActive, order } = req.body;
 
     const chat = await RequiredChat.findById(id);
     if (!chat) {
@@ -604,8 +625,10 @@ export const updateRequiredChat = async (req, res) => {
 
     if (title) chat.title = title.trim();
     if (type) chat.type = type;
-    if (link) chat.link = link.trim();
-    if (chatUsernameOrId !== undefined) chat.chatUsernameOrId = chatUsernameOrId.trim();
+    if (link) {
+      chat.link = link.trim();
+      chat.chatUsernameOrId = req.body.chatUsernameOrId?.trim() || extractTelegramHandle(chat.link);
+    }
     if (isActive !== undefined) chat.isActive = Boolean(isActive);
     if (order !== undefined) chat.order = Number(order);
 

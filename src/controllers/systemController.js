@@ -3,28 +3,75 @@ import { User } from '../models/User.js';
 import { checkChatMembership } from '../services/telegramBot.js';
 
 /**
- * Get active required chats for the client
+ * Get active required chats for the client with fast background auto-verification
  */
 export const getRequiredChats = async (req, res) => {
   try {
     const chats = await RequiredChat.find({ isActive: true }).sort({ order: 1, createdAt: 1 });
     
-    // If user is authenticated, check their verification status
+    // If no required chats exist, always verified
+    if (chats.length === 0) {
+      return res.json({
+        success: true,
+        requiredChats: [],
+        hasCompletedRequiredChats: true,
+        joinedChats: [],
+      });
+    }
+
     let userVerified = false;
     let userJoinedList = [];
 
     if (req.user) {
       const user = await User.findById(req.user._id);
       if (user) {
-        userVerified = Boolean(user.hasCompletedRequiredChats);
-        userJoinedList = user.joinedChats || [];
+        if (user.hasCompletedRequiredChats) {
+          userVerified = true;
+          userJoinedList = user.joinedChats || [];
+        } else {
+          // Fast auto-check during loading screen
+          const telegramId = user.telegramId;
+          const joinedChatIds = new Set(user.joinedChats || []);
+          let allJoinedSoFar = true;
+
+          // Check chats via getChatMember in parallel for near-zero latency
+          await Promise.all(
+            chats.map(async (chat) => {
+              if (joinedChatIds.has(String(chat._id))) {
+                return;
+              }
+
+              const targetHandle = chat.chatUsernameOrId || chat.link;
+              if (chat.type === 'bot' || !targetHandle) {
+                return;
+              }
+
+              const check = await checkChatMembership(targetHandle, telegramId);
+              if (check.ok && check.isMember) {
+                joinedChatIds.add(String(chat._id));
+              } else {
+                allJoinedSoFar = false;
+              }
+            })
+          );
+
+          user.joinedChats = Array.from(joinedChatIds);
+          userJoinedList = user.joinedChats;
+
+          const requiredCheckCount = chats.filter((c) => c.type !== 'bot').length;
+          if (allJoinedSoFar && joinedChatIds.size >= requiredCheckCount) {
+            user.hasCompletedRequiredChats = true;
+            userVerified = true;
+          }
+          await user.save();
+        }
       }
     }
 
     return res.json({
       success: true,
       requiredChats: chats,
-      hasCompletedRequiredChats: chats.length === 0 ? true : userVerified,
+      hasCompletedRequiredChats: userVerified,
       joinedChats: userJoinedList,
     });
   } catch (error) {
@@ -34,7 +81,7 @@ export const getRequiredChats = async (req, res) => {
 };
 
 /**
- * Verify if the user has joined all required chats
+ * Verify if the user has joined all required chats on clicking "I've joined"
  */
 export const verifyChatJoins = async (req, res) => {
   try {
@@ -59,19 +106,24 @@ export const verifyChatJoins = async (req, res) => {
     const joinedChatIds = new Set(user.joinedChats || []);
 
     for (const chat of chats) {
-      // If already marked joined
       if (joinedChatIds.has(String(chat._id))) {
         continue;
       }
 
-      // If it's a bot link or chat username is not provided, we consider it joined on user action
-      if (chat.type === 'bot' || !chat.chatUsernameOrId) {
-        joinedChatIds.add(String(chat._id));
+      const targetHandle = chat.chatUsernameOrId || chat.link;
+
+      // Bot link: consider joined if client confirms clicked
+      if (chat.type === 'bot' || !targetHandle) {
+        if (req.body?.clientConfirmedIds?.includes(String(chat._id))) {
+          joinedChatIds.add(String(chat._id));
+        } else {
+          missingChats.push(chat.title);
+        }
         continue;
       }
 
       // Check via Telegram Bot API getChatMember
-      const check = await checkChatMembership(chat.chatUsernameOrId, telegramId);
+      const check = await checkChatMembership(targetHandle, telegramId);
 
       if (check.ok) {
         if (check.isMember) {
@@ -80,8 +132,7 @@ export const verifyChatJoins = async (req, res) => {
           missingChats.push(chat.title);
         }
       } else {
-        // If bot is not admin in the channel or check couldn't be performed,
-        // we check whether the user has clicked/acknowledged it
+        // If bot is not admin in channel or error, allow client confirmation if user clicked Join
         if (req.body?.clientConfirmedIds?.includes(String(chat._id))) {
           joinedChatIds.add(String(chat._id));
         } else {

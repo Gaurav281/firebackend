@@ -36,6 +36,7 @@ export const getTournaments = async (req, res) => {
         userParticipation: userPart
           ? {
               isJoined: true,
+              referralCode: userPart.referralCode || '',
               turnsLeft: userPart.turnsLeft,
               totalTurns: userPart.totalTurns,
               bestScore: userPart.bestScore,
@@ -97,8 +98,17 @@ export const getTournamentById = async (req, res) => {
     if (userId) {
       const part = participants.find((p) => String(p.userId?._id) === String(userId));
       if (part) {
+        // Ensure participant has a unique 6-digit referral code
+        let userRefCode = part.referralCode;
+        if (!userRefCode) {
+          userRefCode = Math.floor(100000 + Math.random() * 900000).toString();
+          await TournamentParticipant.findByIdAndUpdate(part._id, { referralCode: userRefCode });
+        }
+
         userParticipation = {
           isJoined: true,
+          referralCode: userRefCode,
+          referralBonusTurnsEarned: part.referralBonusTurnsEarned || 0,
           turnsLeft: part.turnsLeft,
           totalTurns: part.totalTurns,
           bestScore: part.bestScore,
@@ -131,6 +141,7 @@ export const getTournamentById = async (req, res) => {
 
 export const joinTournament = async (req, res) => {
   const { tournamentId } = req.params;
+  const { referralCode: inputCode } = req.body || {};
   const userId = req.user._id;
 
   let session = null;
@@ -262,7 +273,36 @@ export const joinTournament = async (req, res) => {
       updatedUser = await userIncQuery;
     }
 
-    // 5. CREATE PARTICIPANT RECORD
+    // 5. GENERATE UNIQUE 6-DIGIT CODE & CHECK REFERRAL
+    const generate6Digit = () => Math.floor(100000 + Math.random() * 900000).toString();
+    let referralCode = generate6Digit();
+    let codeTaken = true;
+    while (codeTaken) {
+      const existing = await TournamentParticipant.findOne({ tournamentId, referralCode });
+      if (!existing) codeTaken = false;
+      else referralCode = generate6Digit();
+    }
+
+    // Process referral code if passed by joining user
+    let referrerParticipant = null;
+    if (inputCode && typeof inputCode === 'string' && inputCode.trim()) {
+      const cleanCode = inputCode.trim();
+      referrerParticipant = await TournamentParticipant.findOne({
+        tournamentId,
+        referralCode: cleanCode,
+      });
+
+      // Valid referrer (must not be self) -> grant them +1 extra turn!
+      if (referrerParticipant && String(referrerParticipant.userId) !== String(userId)) {
+        referrerParticipant.turnsLeft += 1;
+        referrerParticipant.totalTurns += 1;
+        referrerParticipant.referralBonusTurnsEarned = (referrerParticipant.referralBonusTurnsEarned || 0) + 1;
+        await referrerParticipant.save();
+        console.log(`[Referral] User ${userId} joined tournament ${tournamentId} with code ${cleanCode}. Referrer ${referrerParticipant.userId} earned +1 extra turn!`);
+      }
+    }
+
+    // 6. CREATE PARTICIPANT RECORD
     let participant = null;
     try {
       const pData = {
@@ -272,6 +312,9 @@ export const joinTournament = async (req, res) => {
         totalTurns: tournament.turnsPerUser,
         bestScore: 0,
         bestDiamonds: 0,
+        referralCode,
+        referredBy: referrerParticipant ? referrerParticipant.userId : null,
+        usedReferralCode: referrerParticipant ? inputCode.trim() : '',
       };
 
       if (useTransaction) {
@@ -301,10 +344,14 @@ export const joinTournament = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Successfully joined tournament! Good luck racer!',
+      message: referrerParticipant
+        ? `Joined tournament! Friend got +1 turn. Your referral code is ${referralCode}`
+        : `Successfully joined tournament! Your referral code is ${referralCode}`,
       walletBalance: updatedUser.walletBalance,
+      referralCode,
       participant: {
         isJoined: true,
+        referralCode,
         turnsLeft: participant.turnsLeft,
         totalTurns: participant.totalTurns,
         bestScore: participant.bestScore,

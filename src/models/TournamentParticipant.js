@@ -52,6 +52,26 @@ const tournamentParticipantSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    referralCode: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    usedReferralCode: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    referralBonusTurnsEarned: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,
